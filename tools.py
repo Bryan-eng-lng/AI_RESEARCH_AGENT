@@ -3,7 +3,7 @@ import arxiv
 import os
 from typing import List
 from dotenv import load_dotenv 
-from langchain_community.tools.tavily_search import TavilySearchResults
+from langchain_tavily import TavilySearch
 
 
 # --- HELPER: FORMATTER ---
@@ -24,10 +24,9 @@ def web_search(query: str) -> str:
     """Search the web for real-time information. Best for history, news, and general facts."""
     try:     
         # Increase max_results to 5 for better research depth
-        search = TavilySearchResults(max_results=5)
-        raw_results = search.invoke(query)
-        
-        # Pro-Tip: Convert the raw list into a clean string so the Analyst doesn't get confused
+        search = TavilySearch(max_results=5)
+        response = search.invoke(query)
+        raw_results = response.get("results", []) if isinstance(response, dict) else response
         return format_results(raw_results)
     
     except Exception as e:

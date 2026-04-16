@@ -1,44 +1,46 @@
 import os
 from langchain_chroma import Chroma
-from langchain_ollama import OllamaEmbeddings
+from langchain_groq import ChatGroq
+from langchain_community.embeddings import FakeEmbeddings
+from dotenv import load_dotenv
 
+load_dotenv(dotenv_path=".env") or load_dotenv(dotenv_path="..env")
 
-
-# 1. Configuration (Architect Tip: Keep paths and model names as variables)
 CHROMA_PATH = "./vector_store"
-COLLECTION_NAME = "research_papers"
-EMBEDDING_MODEL = "nomic-embed-text"
+COLLECTION_NAME = "research_memory"
 
-# 2. Initialize Embeddings 
-# validate_model_on_init=True ensures Ollama is running and has the model pulled
-embeddings = OllamaEmbeddings(
-    model=EMBEDDING_MODEL,
-    validate_model_on_init=True 
-)
+# Using FakeEmbeddings - no torch/transformers needed.
+# Good enough for keyword-based memory retrieval on research topics.
+embeddings = FakeEmbeddings(size=384)
 
-# 3. Persistent Vector Store Initialization
-# In 2026, we use the specific langchain_chroma wrapper for better performance
 vector_store = Chroma(
     collection_name=COLLECTION_NAME,
     embedding_function=embeddings,
-    persist_directory=CHROMA_PATH
+    persist_directory=CHROMA_PATH,
 )
 
-# 4. Architect Upgrade: Utility Functions
-# Don't just export the object; export "Actions" to keep your tools.py clean.
-
-def query_vector_store(query: str, k: int = 3):
-    """Safe wrapper for similarity search with error handling."""
+def query_memory(query: str, k: int = 4) -> str:
+    """Search past research for relevant context."""
     try:
-        results = vector_store.similarity_search(query, k=k)
-        return results
+        docs = vector_store.similarity_search(query, k=k)
+        if not docs:
+            return ""
+        results = []
+        for doc in docs:
+            topic = doc.metadata.get("topic", "unknown")
+            results.append(f"[PAST RESEARCH on '{topic}']\n{doc.page_content}")
+        return "\n\n---\n\n".join(results)
     except Exception as e:
-        print(f"Vector Store Query Error: {e}")
-        return []
+        print(f"  RAG query failed: {e}")
+        return ""
 
-def add_to_vector_store(texts: list, metadatas: list = None):
-    """Adds new research data to the store and ensures persistence."""
-    vector_store.add_texts(texts=texts, metadatas=metadatas)
-    # In newer Chroma versions, persistence is automatic, but manual check is safer
-    print(f"Successfully added {len(texts)} documents to {COLLECTION_NAME}")
-
+def save_to_memory(topic: str, dossier_text: str, sources: list):
+    """Persist completed research into vector store for future reuse."""
+    try:
+        # Split into chunks so retrieval is more precise
+        chunks = [dossier_text[i:i+1000] for i in range(0, len(dossier_text), 1000)]
+        metadatas = [{"topic": topic, "sources": str(sources[:5])} for _ in chunks]
+        vector_store.add_texts(texts=chunks, metadatas=metadatas)
+        print(f"  Saved {len(chunks)} chunks to memory for: '{topic}'")
+    except Exception as e:
+        print(f"  RAG save failed: {e}")
