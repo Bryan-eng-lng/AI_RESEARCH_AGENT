@@ -9,7 +9,8 @@ from pydantic import BaseModel, Field, field_validator
 from fpdf import FPDF
 from fpdf.enums import XPos, YPos
 
-from langchain_openai import ChatOpenAI
+from langchain_groq import ChatGroq
+from langchain_together import ChatTogether
 from langchain_tavily import TavilySearch
 from langchain_core.messages import SystemMessage, HumanMessage
 from langgraph.graph import StateGraph, END
@@ -27,13 +28,93 @@ web_search = TavilySearch(
     include_raw_content=True,
 )
 
-# ── LLM ───────────────────────────────────────────────────────────────────────
-llm = ChatOpenAI(
-    model="gpt-4o-mini",
-    api_key=os.getenv("OPENAI_API_KEY"),
-    temperature=0.2,
-)
+# ── LLM with key rotation ─────────────────────────────────────────────────────
+_groq_keys = [k for k in [
+    os.getenv("GROQ_API_KEY"),
+    os.getenv("GROQ_API_KEY_2"),
+] if k]
+_key_index = 0
+_using_fallback = False  # True when all Groq keys exhausted, using Together.ai
+_tried_keys: set = set()  # Tracks exhausted Groq key indices across all calls
 
+def make_llm(key: str):
+    return ChatGroq(model="llama-3.3-70b-versatile", api_key=key, temperature=0.2)
+
+def make_together_llm():
+    together_key = os.getenv("TOGETHER_API_KEY")
+    if not together_key:
+        raise RuntimeError("No TOGETHER_API_KEY found in .env")
+    print("  [FALLBACK] Switching to Together.ai (Llama-3.3-70B-Versatile)")
+    return ChatTogether(
+        model="meta-llama/Llama-3.3-70B-Instruct-Turbo-Free",
+        together_api_key=together_key,
+        temperature=0.2,
+    )
+
+llm = make_llm(_groq_keys[0])
+
+def _is_rate_limit_error(e: Exception) -> bool:
+    """Detect rate limit errors across different exception types."""
+    e_str = str(e).lower()
+    e_type = type(e).__name__.lower()
+    return (
+        "429" in str(e)
+        or "rate" in e_str
+        or "limit" in e_str
+        or "ratelimit" in e_type
+        or "quota" in e_str
+        or "tokens per day" in e_str
+        or "try again" in e_str
+    )
+
+def llm_invoke_with_rotation(messages):
+    """Invoke LLM, rotating Groq keys on rate limit, then falling back to Together.ai."""
+    global llm, _key_index, _using_fallback, _tried_keys
+
+    if _using_fallback:
+        try:
+            return llm.invoke(messages)
+        except Exception as e:
+            print(f"  [TOGETHER ERROR] {e}")
+            raise
+
+    while True:
+        try:
+            return llm.invoke(messages)
+        except Exception as e:
+            if _is_rate_limit_error(e):
+                _tried_keys.add(_key_index)
+                next_index = next(
+                    (i for i in range(len(_groq_keys)) if i not in _tried_keys),
+                    None
+                )
+                if next_index is not None:
+                    _key_index = next_index
+                    llm = make_llm(_groq_keys[_key_index])
+                    print(f"  [KEY ROTATION] Switched to Groq key {_key_index + 1}")
+                    time.sleep(3)
+                else:
+                    print("  [RATE LIMIT] All Groq keys exhausted, switching to Together.ai...")
+                    try:
+                        llm = make_together_llm()
+                        _using_fallback = True
+                        _tried_keys = set()  # reset for future use
+                        time.sleep(2)
+                    except Exception as fallback_e:
+                        if "401" in str(fallback_e) or "invalid" in str(fallback_e).lower():
+                            print("  [TOGETHER AUTH FAILED] Invalid API key — check TOGETHER_API_KEY in .env")
+                        raise fallback_e
+            else:
+                print(f"  [LLM ERROR] {type(e).__name__}: {e}")
+                raise
+
+def _rotate_key():
+    """Rotate to next available Groq API key."""
+    global llm, _key_index, _using_fallback
+    if _using_fallback:
+        return
+    _key_index = (_key_index + 1) % len(_groq_keys)
+    llm = make_llm(_groq_keys[_key_index])
 # ── PERSISTENCE ───────────────────────────────────────────────────────────────
 conn = sqlite3.connect("research_memory.db", check_same_thread=False)
 memory = SqliteSaver(conn)
@@ -104,6 +185,7 @@ class AgentState(Dict):
     quality: QualityVerdict
     iteration: int
     research_rounds: int
+    challenge_notes: str  # feedback from section_challenger for targeted rewrite
 
 # ── SYSTEM PROMPTS ─────────────────────────────────────────────────────────────
 STRATEGIST_PROMPT = """You are an elite intelligence analyst. Build a comprehensive research plan.
@@ -132,7 +214,22 @@ WRITING RULES - CRITICAL:
 5. Show tradeoffs, engineering decisions, real-world implications.
 6. MINIMUM 5 chapters. Each on its own distinct angle.
 7. Executive summary MUST be at least 150 words covering key findings and strategic implications.
-8. key_findings must be 5 sentences each with a hard number or specific fact."""
+8. key_findings must be 5 sentences each with a hard number or specific fact.
+
+CRITICAL - ANALYTICAL DEPTH RULES (this separates great reports from average ones):
+9. NEVER just describe what happened. Always explain WHY it happened and what a BETTER alternative could have been.
+   BAD: "Nokia failed to adapt to smartphones."
+   GOOD: "Nokia's failure to adopt a touch-first OS was a strategic mistake — the company had the engineering talent but lacked the organizational will. A better path would have been to spin off a dedicated smartphone unit with full autonomy, as Samsung did with its Android division."
+10. CONTRARIAN ANGLE REQUIRED: Every report must include at least one section that challenges the obvious narrative.
+    Ask: Was it entirely the subject's fault? What external forces (ecosystem effects, network effects, competitor moves) made failure almost inevitable regardless of internal decisions?
+11. COMPARISON TABLE REQUIRED: Include at least one structured comparison in the report.
+    Format it as a plain-text table using | separators. Example:
+    | Metric | Subject A | Subject B |
+    | Market Share 2007 | 70% | 3% |
+    | OS Strategy | Symbian | iOS |
+12. TIMELINE REQUIRED: Include a concise chronological timeline of key events in one section.
+    Format: YEAR: Event — consequence
+13. DO NOT repeat the same point across sections. Each section must add NEW insight."""
 
 CRITIC_PROMPT = """You are a ruthless research quality auditor for a top-tier journal.
 Score the report 1-10:
@@ -150,10 +247,21 @@ def strategist_node(state: AgentState):
     structured_llm = llm.with_structured_output(ResearchPlan)
     memory_hint = f"\n\nPAST RESEARCH (avoid re-searching these):\n{memory_context}" if memory_context else ""
     time.sleep(5)
-    plan = structured_llm.invoke([
-        SystemMessage(content=STRATEGIST_PROMPT),
-        HumanMessage(content=f"Build research plan for: {state['topic']}{memory_hint}")
-    ])
+    for attempt in range(len(_groq_keys) * 2 + 1):
+        try:
+            plan = structured_llm.invoke([
+                SystemMessage(content=STRATEGIST_PROMPT),
+                HumanMessage(content=f"Build research plan for: {state['topic']}{memory_hint}")
+            ])
+            break
+        except Exception as e:
+            if _is_rate_limit_error(e):
+                _rotate_key()
+                structured_llm = llm.with_structured_output(ResearchPlan)
+                print(f"  [KEY ROTATION] Switched to key {_key_index + 1}")
+                time.sleep(3)
+            else:
+                raise
     print(f"  {len(plan.queries)} queries planned")
     return {
         "plan": plan,
@@ -251,8 +359,39 @@ def crawler_node(state: AgentState):
         "research_rounds": rounds,
     }
 
+def generate_section_topics(topic: str, raw_data: str) -> List[str]:
+    """Ask the LLM to propose 6-7 section titles tailored to the research topic."""
+    prompt = f"""You are planning a long-form research report on: "{topic}"
+
+Based on this topic, propose exactly 7 section titles that together give comprehensive coverage.
+Rules:
+- Each title must be specific and distinct — no overlap
+- One section MUST be a timeline of key events (title it like "Timeline: [Topic] from [Year] to [Year]")
+- One section MUST be a contrarian/critical analysis (title it like "The Contrarian View: Was Failure Inevitable?" or similar)
+- One section MUST be a comparison (title it like "Comparative Analysis: [A] vs [B]" or similar)
+Return ONLY a Python list of strings, nothing else. Example:
+["Title One", "Title Two", "Title Three", "Title Four", "Title Five", "Title Six", "Title Seven"]"""
+    try:
+        response = llm_invoke_with_rotation([HumanMessage(content=prompt)]).content.strip()
+        import ast, re
+        match = re.search(r'\[.*?\]', response, re.DOTALL)
+        if match:
+            return ast.literal_eval(match.group())
+    except Exception:
+        pass
+    # Fallback generic sections
+    return [
+        "Origins and Early Innovation",
+        "Peak Years and Market Dominance",
+        "Timeline: Key Events and Turning Points",
+        "Disruption and Strategic Missteps",
+        "Comparative Analysis: Key Competitors vs Subject",
+        "The Contrarian View: Was Failure Inevitable?",
+        "Legacy and Long-Term Impact",
+    ]
+
 def architect_node(state: AgentState):
-    print("\n[ARCHITECT] Writing research report...")
+    print("\n[ARCHITECT] Writing research report section by section...")
 
     top_index = dict(sorted(state["source_index"].items())[:30])
     top_titles = {k: state["source_titles"].get(k, "") for k in top_index}
@@ -262,55 +401,109 @@ def architect_node(state: AgentState):
     )
 
     raw = state["raw_data"]
-    if len(raw) > 12000:
-        raw = raw[:12000] + "\n[truncated]"
+    if len(raw) > 14000:
+        raw = raw[:14000] + "\n[truncated]"
 
     memory_section = (
-        f"\n\nPAST RESEARCH CONTEXT:\n{state['memory_context'][:2000]}"
+        f"\n\nPAST RESEARCH CONTEXT:\n{state['memory_context'][:1500]}"
         if state.get("memory_context") else ""
     )
 
-    # STEP 1: Free-form writing - no schema = no length constraints
-    write_prompt = f"""You are a world-class investigative journalist writing a 3000-word deep-dive research article for a technical publication like MIT Technology Review or IEEE Spectrum.
+    topic = state["topic"]
+    context_block = f"""TOPIC: {topic}
 
-TOPIC: {state['topic']}
-
-SOURCES (cite as [N] inline when using specific facts):
+SOURCES (cite inline as [N] when using specific facts):
 {index_str}
 
-RAW DATA FROM SOURCES:
-{raw}{memory_section}
+RAW DATA:
+{raw}{memory_section}"""
 
-Write a complete, deeply researched article. Requirements:
-- Minimum 3000 words total
-- Write in flowing paragraphs, not bullet points
-- Each section must be at least 400 words
-- Use your expert knowledge to explain WHY and HOW, not just WHAT
-- Cite specific facts from sources using [N] notation
-- Include specific numbers, dates, technical details
-- Show tensions, tradeoffs, engineering decisions and their consequences
-- Write like you are explaining to a senior engineer who wants depth
+    section_system = (
+        "You are a senior investigative journalist writing for IEEE Spectrum or MIT Technology Review. "
+        "Write dense, expert-level prose. Every paragraph must contain specific facts, dates, numbers, or technical details. "
+        "Never write vague generalities. Never use bullet points. Minimum 450 words per section. Do not truncate."
+    )
 
-Structure your article with these clearly labeled sections:
+    # Step 1: Write title, key findings, executive summary
+    print("  Writing header (title, findings, summary)...")
+    time.sleep(3)
+    header = llm_invoke_with_rotation([
+        SystemMessage(content=section_system),
+        HumanMessage(content=f"""{context_block}
+
+Write ONLY the following three parts, nothing else:
+
 ## TITLE
-## KEY_FINDINGS (5 numbered findings, each with a hard fact)
-## EXECUTIVE_SUMMARY (200+ words)
-## SECTION: [name]
-[400+ words of deep analysis]
-## SECTION: [name]
-[400+ words]
-[continue for 5-6 sections total]
-## SYNTHESIS
-[150+ words of non-obvious cross-section insight]
+[A specific, descriptive title for this research report]
 
-Begin writing now. Do not truncate. Write the complete article."""
+## KEY_FINDINGS
+1. [Finding with hard fact and citation]
+2. [Finding with hard fact and citation]
+3. [Finding with hard fact and citation]
+4. [Finding with hard fact and citation]
+5. [Finding with hard fact and citation]
 
-    print("  Step 1: Free-form writing...")
-    raw_report = llm.invoke([
-        SystemMessage(content="You are an expert research analyst. Write detailed, long-form content. Never truncate. Always complete every section fully."),
-        HumanMessage(content=write_prompt)
+## EXECUTIVE_SUMMARY
+[200-250 words. Written for a senior decision-maker. Cover what was investigated, the 3 most critical findings with specific metrics, and the strategic implication. Must include real numbers and dates.]""")
     ]).content
-    print(f"  Raw report: {len(raw_report)} chars written")
+
+    # Step 2: Write each section independently
+    section_topics = generate_section_topics(topic, raw)
+    sections = []
+    for i, sec_title in enumerate(section_topics, 1):
+        print(f"  Writing section {i}/{len(section_topics)}: {sec_title}...")
+        time.sleep(4)
+        section = llm_invoke_with_rotation([
+            SystemMessage(content=section_system),
+            HumanMessage(content=f"""{context_block}
+
+Write ONLY this one section. Do not write any other sections.
+
+## SECTION: {sec_title}
+
+Requirements:
+- Minimum 450 words of flowing prose
+- Include specific dates, metrics, technical decisions, and their consequences
+- Cite sources inline using [N] notation
+- Explain the WHY and HOW, not just the WHAT
+- Show cause-and-effect chains and engineering/business tradeoffs
+- Write as if explaining to a senior engineer or executive who wants depth
+
+ANALYTICAL DEPTH — MANDATORY:
+- Do NOT just describe events. After every major fact, add your critical judgment:
+  "This decision was a mistake because...", "A better alternative would have been...", "In hindsight..."
+- Include a CONTRARIAN perspective: challenge the obvious narrative. Ask what external forces
+  (ecosystem lock-in, network effects, competitor moves, market timing) made the outcome
+  partially or fully inevitable — regardless of internal decisions.
+- If this section covers a comparison or timeline, include a plain-text table using | separators
+  OR a year-by-year timeline in format: YEAR: Event — consequence
+- Avoid repeating points already covered in other sections. Add NEW insight only.
+
+Begin the section now and write until you have covered the topic thoroughly:""")
+        ]).content
+        # Normalize section header in case model added extra text before it
+        if f"## SECTION: {sec_title}" not in section:
+            section = f"## SECTION: {sec_title}\n{section}"
+        sections.append(section)
+
+    # Step 3: Write synthesis
+    print("  Writing synthesis...")
+    time.sleep(3)
+    synthesis = llm_invoke_with_rotation([
+        SystemMessage(content=section_system),
+        HumanMessage(content=f"""{context_block}
+
+Write ONLY the final synthesis section.
+
+## SYNTHESIS
+[150-200 words. Reveal a non-obvious connection across all the themes covered.
+What does the data collectively suggest that no single section states explicitly?
+Include a contrarian take — something that challenges the dominant narrative of the report.
+Be specific, opinionated, and insightful. No vague conclusions.]""")
+    ]).content
+
+    raw_report = header + "\n\n" + "\n\n".join(sections) + "\n\n" + synthesis
+    print(f"  Total report: {len(raw_report)} chars across {len(sections)} sections")
 
     with open("raw_report_debug.txt", "w", encoding="utf-8") as f:
         f.write(raw_report)
@@ -377,68 +570,74 @@ def draw_line(pdf, w, r=180, g=180, b=180):
     pdf.ln(3)
 
 # ── PDF EXPORT ─────────────────────────────────────────────────────────────────
+def clean_body(text: str) -> str:
+    """Strip leaked markdown headers and extra blank lines from section body."""
+    import re
+    # Remove any ## heading lines that leaked into body
+    text = re.sub(r'^##\s+.+\n?', '', text, flags=re.MULTILINE)
+    # Collapse 3+ blank lines into 1
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
+
 def export_to_pdf(raw_report: str, source_index: Dict, source_titles: Dict, topic: str):
     import re
     pdf = FPDF()
-    pdf.set_auto_page_break(auto=True, margin=20)
-    pdf.set_margins(18, 18, 18)
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.set_margins(18, 15, 18)
     w = 210 - 36
 
-    # Parse title from raw report
+    # Parse title
     title_match = re.search(r'##\s*TITLE\s*\n(.+)', raw_report)
     title = title_match.group(1).strip() if title_match else topic
-
-    # Parse sections
-    sections = re.split(r'\n##\s+', raw_report)
 
     # ── COVER PAGE ────────────────────────────────────────────────────────────
     pdf.add_page()
     pdf.set_fill_color(20, 20, 20)
     pdf.rect(0, 0, 210, 8, "F")
-    pdf.ln(20)
-    pdf.set_font("Helvetica", "B", 20)
+    pdf.ln(18)
+    pdf.set_font("Helvetica", "B", 19)
     pdf.set_text_color(20, 20, 20)
-    pdf.multi_cell(w, 11, sanitize(title.upper()), align="C")
-    pdf.ln(4)
-    draw_line(pdf, w, 20, 20, 20)
+    pdf.multi_cell(w, 10, sanitize(title.upper()), align="C")
     pdf.ln(3)
-    pdf.set_font("Helvetica", "", 10)
+    draw_line(pdf, w, 20, 20, 20)
+    pdf.ln(2)
+    pdf.set_font("Helvetica", "", 9)
     pdf.set_text_color(100, 100, 100)
     date_str = datetime.now().strftime("%B %d, %Y")
     pdf.cell(w, 6, f"Research Report  |  Generated {date_str}  |  {len(source_index)} verified sources",
              align="C", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-    pdf.ln(10)
+    pdf.ln(7)
 
     # Key findings on cover
     findings_match = re.search(r'KEY_FINDINGS[:\s]*\n(.*?)(?=\n##|\nEXECUTIVE|\Z)', raw_report, re.DOTALL)
     if findings_match:
-        pdf.set_font("Helvetica", "B", 11)
+        pdf.set_font("Helvetica", "B", 10)
         pdf.set_text_color(20, 20, 20)
-        pdf.cell(w, 8, "KEY FINDINGS", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.cell(w, 7, "KEY FINDINGS", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         draw_line(pdf, w, 180, 180, 180)
-        pdf.ln(2)
-        pdf.set_font("Helvetica", "", 10)
+        pdf.ln(1)
+        pdf.set_font("Helvetica", "", 9)
         pdf.set_text_color(40, 40, 40)
         for line in findings_match.group(1).strip().split("\n"):
             if line.strip():
-                pdf.multi_cell(w, 6, sanitize(line.strip()))
-                pdf.ln(1)
+                pdf.multi_cell(w, 5.5, sanitize(line.strip()))
+                pdf.ln(0.5)
 
-    pdf.ln(8)
+    pdf.ln(5)
 
     # TOC
     draw_line(pdf, w)
-    pdf.set_font("Helvetica", "B", 11)
+    pdf.set_font("Helvetica", "B", 10)
     pdf.set_text_color(20, 20, 20)
-    pdf.cell(w, 8, "TABLE OF CONTENTS", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.cell(w, 7, "TABLE OF CONTENTS", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
     draw_line(pdf, w)
-    pdf.ln(2)
-    pdf.set_font("Helvetica", "", 10)
+    pdf.ln(1)
+    pdf.set_font("Helvetica", "", 9)
     pdf.set_text_color(60, 60, 60)
-    section_titles = re.findall(r'\n##\s+SECTION:\s*(.+)', raw_report)
+    section_titles = re.findall(r'##\s+SECTION:\s*(.+)', raw_report)
     toc = ["Executive Summary"] + section_titles + ["Synthesis", "Verified Sources"]
     for i, item in enumerate(toc, 1):
-        pdf.cell(w, 6, sanitize(f"  {i}.  {item}"), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.cell(w, 5.5, sanitize(f"  {i}.  {item}"), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
     pdf.set_fill_color(20, 20, 20)
     pdf.rect(0, 287, 210, 10, "F")
@@ -447,63 +646,102 @@ def export_to_pdf(raw_report: str, source_index: Dict, source_titles: Dict, topi
     exec_match = re.search(r'EXECUTIVE_SUMMARY[:\s]*\n(.*?)(?=\n##\s+SECTION|\Z)', raw_report, re.DOTALL)
     if exec_match:
         pdf.add_page()
-        pdf.set_font("Helvetica", "B", 14)
+        pdf.set_font("Helvetica", "B", 13)
         pdf.set_text_color(20, 20, 20)
-        pdf.cell(w, 10, "EXECUTIVE SUMMARY", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.cell(w, 8, "EXECUTIVE SUMMARY", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         draw_line(pdf, w, 20, 20, 20)
-        pdf.ln(4)
-        pdf.set_font("Helvetica", "", 11)
+        pdf.ln(3)
+        pdf.set_font("Helvetica", "", 9.5)
         pdf.set_text_color(30, 30, 30)
-        pdf.multi_cell(w, 7, sanitize(exec_match.group(1).strip()))
+        pdf.multi_cell(w, 5.5, sanitize(clean_body(exec_match.group(1))))
 
-    # ── SECTIONS ──────────────────────────────────────────────────────────────
-    section_blocks = re.findall(r'\n##\s+SECTION:\s*(.+?)\n(.*?)(?=\n##\s+SECTION:|\n##\s+SYNTHESIS|\Z)',
-                                 raw_report, re.DOTALL)
+    # ── SECTIONS (no page break between — just a divider) ─────────────────────
+    section_blocks = re.findall(
+        r'##\s+SECTION:\s*(.+?)\n(.*?)(?=\n##\s+SECTION:|##\s+SYNTHESIS|\Z)',
+        raw_report, re.DOTALL
+    )
     for idx, (sec_title, sec_body) in enumerate(section_blocks, 1):
-        pdf.add_page()
-        pdf.set_font("Helvetica", "B", 11)
-        pdf.set_text_color(100, 100, 100)
-        pdf.cell(w, 7, f"Section {idx}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-        pdf.set_font("Helvetica", "B", 16)
+        # Small gap + divider instead of new page
+        pdf.ln(6)
+        draw_line(pdf, w, 180, 180, 180)
+        pdf.ln(3)
+        pdf.set_font("Helvetica", "B", 8)
+        pdf.set_text_color(130, 130, 130)
+        pdf.cell(w, 5, f"SECTION {idx}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.set_font("Helvetica", "B", 13)
         pdf.set_text_color(20, 20, 20)
-        pdf.multi_cell(w, 10, sanitize(sec_title.strip()))
-        draw_line(pdf, w, 20, 20, 20)
-        pdf.ln(4)
-        pdf.set_font("Helvetica", "", 10)
-        pdf.set_text_color(20, 20, 20)
-        pdf.multi_cell(w, 6, sanitize(sec_body.strip()))
+        pdf.multi_cell(w, 7, sanitize(sec_title.strip()))
+        pdf.ln(2)
+        pdf.set_font("Helvetica", "", 9.5)
+        pdf.set_text_color(30, 30, 30)
+        pdf.multi_cell(w, 5.5, sanitize(clean_body(sec_body)))
 
     # ── SYNTHESIS ─────────────────────────────────────────────────────────────
     synth_match = re.search(r'##\s+SYNTHESIS\s*\n(.*?)(?=\n##|\Z)', raw_report, re.DOTALL)
     if synth_match:
-        pdf.add_page()
-        pdf.set_font("Helvetica", "B", 14)
-        pdf.set_text_color(20, 20, 20)
-        pdf.cell(w, 10, "FINAL SYNTHESIS", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.ln(6)
         draw_line(pdf, w, 20, 20, 20)
-        pdf.ln(4)
-        pdf.set_font("Helvetica", "", 11)
-        pdf.multi_cell(w, 7, sanitize(synth_match.group(1).strip()))
-
-    # ── VERIFIED SOURCES ──────────────────────────────────────────────────────
-    pdf.add_page()
-    pdf.set_font("Helvetica", "B", 14)
-    pdf.set_text_color(20, 20, 20)
-    pdf.cell(w, 10, "VERIFIED SOURCES", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-    draw_line(pdf, w, 20, 20, 20)
-    pdf.ln(4)
-    for sid in sorted(source_index.keys()):
-        url = source_index[sid]
-        title_s = source_titles.get(sid, url)
-        pdf.set_font("Helvetica", "B", 9)
-        pdf.set_text_color(30, 30, 30)
-        pdf.multi_cell(w, 5, sanitize(f"[{sid}]  {title_s}"))
-        pdf.set_font("Helvetica", "", 8)
-        pdf.set_text_color(0, 60, 160)
-        for chunk in [url[i:i+90] for i in range(0, len(url), 90)]:
-            pdf.cell(w, 4, sanitize(f"      {chunk}"), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-        pdf.set_text_color(0, 0, 0)
         pdf.ln(3)
+        pdf.set_font("Helvetica", "B", 13)
+        pdf.set_text_color(20, 20, 20)
+        pdf.cell(w, 8, "FINAL SYNTHESIS", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.ln(2)
+        pdf.set_font("Helvetica", "", 9.5)
+        pdf.set_text_color(30, 30, 30)
+        pdf.multi_cell(w, 5.5, sanitize(clean_body(synth_match.group(1))))
+
+    # ── VERIFIED SOURCES (2 columns, compact) ─────────────────────────────────
+    pdf.add_page()
+    pdf.set_font("Helvetica", "B", 13)
+    pdf.set_text_color(20, 20, 20)
+    pdf.cell(w, 8, "VERIFIED SOURCES", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    draw_line(pdf, w, 20, 20, 20)
+    pdf.ln(2)
+
+    col_w = (w - 4) / 2  # two columns with 4mm gap
+    sources = sorted(source_index.keys())
+    left_col = sources[:len(sources)//2 + len(sources)%2]
+    right_col = sources[len(sources)//2 + len(sources)%2:]
+
+    start_y = pdf.get_y()
+    # Left column
+    pdf.set_xy(pdf.l_margin, start_y)
+    for sid in left_col:
+        url = source_index[sid]
+        title_s = source_titles.get(sid, url)[:60]
+        pdf.set_font("Helvetica", "B", 7.5)
+        pdf.set_text_color(30, 30, 30)
+        pdf.set_x(pdf.l_margin)
+        pdf.multi_cell(col_w, 4, sanitize(f"[{sid}] {title_s}"))
+        pdf.set_font("Helvetica", "", 7)
+        pdf.set_text_color(0, 60, 160)
+        pdf.set_x(pdf.l_margin)
+        pdf.multi_cell(col_w, 3.5, sanitize(url[:75]))
+        pdf.set_text_color(0, 0, 0)
+        pdf.set_x(pdf.l_margin)
+        pdf.ln(1.5)
+
+    mid_y = pdf.get_y()
+
+    # Right column — reset to start_y, offset by col_w + gap
+    pdf.set_xy(pdf.l_margin + col_w + 4, start_y)
+    for sid in right_col:
+        if pdf.get_y() > 270:
+            pdf.add_page()
+            pdf.set_xy(pdf.l_margin + col_w + 4, 15)
+        url = source_index[sid]
+        title_s = source_titles.get(sid, url)[:60]
+        pdf.set_font("Helvetica", "B", 7.5)
+        pdf.set_text_color(30, 30, 30)
+        pdf.set_x(pdf.l_margin + col_w + 4)
+        pdf.multi_cell(col_w, 4, sanitize(f"[{sid}] {title_s}"))
+        pdf.set_font("Helvetica", "", 7)
+        pdf.set_text_color(0, 60, 160)
+        pdf.set_x(pdf.l_margin + col_w + 4)
+        pdf.multi_cell(col_w, 3.5, sanitize(url[:75]))
+        pdf.set_text_color(0, 0, 0)
+        pdf.set_x(pdf.l_margin + col_w + 4)
+        pdf.ln(1.5)
 
     pdf.set_fill_color(20, 20, 20)
     pdf.rect(0, 287, 210, 10, "F")
@@ -514,24 +752,154 @@ def export_to_pdf(raw_report: str, source_index: Dict, source_titles: Dict, topi
     print(f"\n[EXPORTED] {filename} | {len(section_blocks)} sections | {len(source_index)} sources")
     return filename
 
+CHALLENGER_PROMPT = """You are a sharp editorial critic reviewing a research report before publication.
+Your job: find the 2 weakest sections and return specific, actionable challenges.
+
+For each weak section, identify ONE of these problems:
+- "Safe explanation" — describes what happened but never says why it was wrong or what better alternative existed
+- "Repetition" — repeats a point already made in another section
+- "Missing contrarian" — accepts the obvious narrative without challenging it
+- "No specifics" — makes claims without hard numbers, dates, or named decisions
+
+Be surgical. Return exactly 2 challenges, each targeting a specific section by its title.
+Format strictly as:
+SECTION: [exact section title]
+PROBLEM: [one of the 4 problem types above]
+CHALLENGE: [one sharp question or missing angle the rewrite must address]
+---
+SECTION: [exact section title]
+PROBLEM: [one of the 4 problem types above]
+CHALLENGE: [one sharp question or missing angle the rewrite must address]"""
+
+def section_challenger_node(state: AgentState):
+    print("\n[CHALLENGER] Identifying weak sections...")
+    raw = state.get("raw_report", "")
+
+    # Extract just section titles + first 300 chars of each for efficiency
+    import re
+    sections = re.findall(r'##\s+SECTION:\s*(.+?)\n(.{0,300})', raw, re.DOTALL)
+    if not sections:
+        print("  No sections found, skipping challenge.")
+        return {"challenge_notes": ""}
+
+    preview = "\n\n".join(
+        f"SECTION: {title.strip()}\n{body.strip()[:300]}"
+        for title, body in sections
+    )
+
+    response = llm_invoke_with_rotation([
+        SystemMessage(content=CHALLENGER_PROMPT),
+        HumanMessage(content=f"TOPIC: {state['topic']}\n\nREPORT SECTIONS PREVIEW:\n{preview}")
+    ])
+
+    notes = response.content.strip()
+    print(f"  Challenges identified:\n{notes[:300]}...")
+    return {"challenge_notes": notes}
+
+
+def targeted_rewrite_node(state: AgentState):
+    print("\n[REWRITER] Fixing challenged sections...")
+    notes = state.get("challenge_notes", "")
+    if not notes:
+        print("  No challenges to address, skipping.")
+        return {}
+
+    import re
+    raw = state.get("raw_report", "")
+
+    # Parse challenged section titles from notes
+    challenged = re.findall(r'SECTION:\s*(.+)', notes)
+    if not challenged:
+        return {}
+
+    top_index = dict(sorted(state["source_index"].items())[:30])
+    top_titles = {k: state["source_titles"].get(k, "") for k in top_index}
+    index_str = "\n".join(
+        f"[{sid}] {url} - \"{top_titles.get(sid, '')}\""
+        for sid, url in top_index.items()
+    )
+
+    updated_report = raw
+    for sec_title in challenged[:2]:  # max 2 rewrites
+        sec_title = sec_title.strip()
+        # Find the challenge note for this section
+        challenge_match = re.search(
+            rf'SECTION:\s*{re.escape(sec_title)}.*?CHALLENGE:\s*(.+?)(?=---|$)',
+            notes, re.DOTALL
+        )
+        challenge_text = challenge_match.group(1).strip() if challenge_match else "Add critical analysis and contrarian perspective."
+
+        print(f"  Rewriting: {sec_title[:60]}...")
+        print(f"  Challenge: {challenge_text[:100]}")
+
+        # Find existing section content
+        sec_match = re.search(
+            rf'(##\s+SECTION:\s*{re.escape(sec_title)}\n)(.*?)(?=\n##\s+SECTION:|\n##\s+SYNTHESIS|\Z)',
+            updated_report, re.DOTALL
+        )
+        if not sec_match:
+            print(f"  Section not found in report, skipping.")
+            continue
+
+        existing_body = sec_match.group(2).strip()[:1500]
+
+        rewritten = llm_invoke_with_rotation([
+            SystemMessage(content=(
+                "You are rewriting one section of a research report to fix a specific weakness. "
+                "Keep all correct facts. Improve the analysis. Minimum 400 words. "
+                "Cite sources inline as [N]. No bullet points. Flowing prose only."
+            )),
+            HumanMessage(content=f"""TOPIC: {state['topic']}
+
+SOURCE INDEX:
+{index_str}
+
+SECTION TO REWRITE: {sec_title}
+
+EXISTING CONTENT (keep facts, improve analysis):
+{existing_body}
+
+SPECIFIC CHALLENGE TO ADDRESS:
+{challenge_text}
+
+Rewrite this section now, directly addressing the challenge:""")
+        ]).content
+
+        # Replace old section body with rewritten version
+        updated_report = updated_report[:sec_match.start(2)] + "\n" + rewritten + "\n" + updated_report[sec_match.end(2):]
+        time.sleep(3)
+
+    print(f"  Rewrite complete. {len(challenged[:2])} section(s) improved.")
+
+    # Save updated report to debug file
+    with open("raw_report_debug.txt", "w", encoding="utf-8") as f:
+        f.write(updated_report)
+
+    return {"raw_report": updated_report}
+
+
 # ── GRAPH ──────────────────────────────────────────────────────────────────────
 builder = StateGraph(AgentState)
-builder.add_node("strategist",       strategist_node)
-builder.add_node("commander_review", hitl_node)
-builder.add_node("crawler",          crawler_node)
-builder.add_node("architect",        architect_node)
-builder.add_node("factcheck",        factcheck_node)
-builder.add_node("critic",           critic_node)
-builder.add_node("refine",           refine_node)
+builder.add_node("strategist",          strategist_node)
+builder.add_node("commander_review",    hitl_node)
+builder.add_node("crawler",             crawler_node)
+builder.add_node("architect",           architect_node)
+builder.add_node("section_challenger",  section_challenger_node)
+builder.add_node("targeted_rewrite",    targeted_rewrite_node)
+builder.add_node("factcheck",           factcheck_node)
+builder.add_node("critic",              critic_node)
+builder.add_node("refine",              refine_node)
 
 builder.set_entry_point("strategist")
-builder.add_edge("strategist",       "commander_review")
-builder.add_edge("commander_review", "crawler")
-builder.add_edge("crawler",          "architect")
-builder.add_edge("architect",        "factcheck")
-builder.add_edge("factcheck",        "critic")
+builder.add_edge("strategist",         "commander_review")
+builder.add_edge("commander_review",   "crawler")
+builder.add_edge("crawler",            "architect")
+builder.add_edge("architect",          "section_challenger")
+builder.add_edge("section_challenger", "targeted_rewrite")
+builder.add_edge("targeted_rewrite",   "factcheck")
+builder.add_edge("factcheck",          "critic")
 builder.add_conditional_edges("critic", should_refine, {"refine": "refine", "export": END})
-builder.add_edge("refine",           "crawler")
+builder.add_edge("refine",             "crawler")
 
 app = builder.compile(checkpointer=memory, interrupt_before=["commander_review"])
 
