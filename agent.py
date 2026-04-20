@@ -29,6 +29,9 @@ def get_web_search():
         include_raw_content=True,
     )
 
+def make_llm(key: str):
+    return ChatGroq(model="llama-3.3-70b-versatile", api_key=key, temperature=0.2)
+
 # ── LLM with key rotation ─────────────────────────────────────────────────────
 _groq_keys = []
 _key_index = 0
@@ -40,15 +43,14 @@ def _init_llm():
     """Initialize LLM on first use, not at import time."""
     global _groq_keys, llm
     if not _groq_keys:
-        _groq_keys = [k for k in [
-            os.getenv("GROQ_API_KEY"),
-            os.getenv("GROQ_API_KEY_2"),
-        ] if k]
+        _groq_keys = [k.strip() for k in [
+            os.getenv("GROQ_API_KEY", ""),
+            os.getenv("GROQ_API_KEY_2", ""),
+        ] if k and k.strip()]
+        print(f"  [INIT] Loaded {len(_groq_keys)} Groq keys")
     if llm is None and _groq_keys:
         llm = make_llm(_groq_keys[0])
-
-def make_llm(key: str):
-    return ChatGroq(model="llama-3.3-70b-versatile", api_key=key, temperature=0.2)
+        print(f"  [INIT] LLM initialized with key index 0")
 
 def make_together_llm():
     together_key = os.getenv("TOGETHER_API_KEY")
