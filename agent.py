@@ -22,11 +22,12 @@ from rag import query_memory, save_to_memory
 load_dotenv(dotenv_path=".env")
 
 # ── TOOLS ─────────────────────────────────────────────────────────────────────
-web_search = TavilySearch(
-    max_results=6,
-    tavily_api_key=os.getenv("TAVILY_API_KEY"),
-    include_raw_content=True,
-)
+def get_web_search():
+    return TavilySearch(
+        max_results=6,
+        tavily_api_key=os.getenv("TAVILY_API_KEY"),
+        include_raw_content=True,
+    )
 
 # ── LLM with key rotation ─────────────────────────────────────────────────────
 _groq_keys = [k for k in [
@@ -315,6 +316,7 @@ def crawler_node(state: AgentState):
     for i, q in enumerate(queries, 1):
         print(f"  [{i}/{len(queries)}] {q[:65]}...")
         try:
+            web_search = get_web_search()
             response = web_search.invoke(q)
             items = response.get("results", []) if isinstance(response, dict) else response
             for r in items:
