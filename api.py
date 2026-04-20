@@ -1,0 +1,219 @@
+import os
+import uuid
+import threading
+from pathlib import Path
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+from typing import Optional
+import uvicorn
+
+app = FastAPI(title="AI Research Agent")
+
+# ── SESSION STORE ─────────────────────────────────────────────────────────────
+sessions = {}
+# session = {
+#   "status": "planning" | "awaiting_approval" | "running" | "done" | "error",
+#   "topic": str,
+#   "queries": [...],
+#   "reasoning": str,
+#   "current_node": str,
+#   "progress": int (0-100),
+#   "pdf_path": str | None,
+#   "error": str | None,
+# }
+
+# ── REQUEST MODELS ─────────────────────────────────────────────────────────────
+class PlanRequest(BaseModel):
+    topic: str
+
+class StartRequest(BaseModel):
+    session_id: str
+    queries: list = []  # optional override — user can remove queries before starting
+
+# ── STEP 1: PLAN ──────────────────────────────────────────────────────────────
+@app.post("/research/plan")
+def plan_research(req: PlanRequest):
+    """Run strategist node, return queries for user approval."""
+    from agent import strategist_node, AgentState
+
+    session_id = str(uuid.uuid4())
+    sessions[session_id] = {
+        "status": "planning",
+        "topic": req.topic,
+        "queries": [],
+        "reasoning": "",
+        "current_node": "strategist",
+        "progress": 5,
+        "pdf_path": None,
+        "error": None,
+    }
+
+    try:
+        state = strategist_node({"topic": req.topic})
+        plan = state["plan"]
+        sessions[session_id].update({
+            "status": "awaiting_approval",
+            "queries": plan.queries,
+            "reasoning": plan.reasoning,
+            "current_node": "commander_review",
+            "progress": 10,
+            # carry forward state fields needed for run
+            "_state": {
+                "topic": req.topic,
+                "plan": plan,
+                "iteration": state["iteration"],
+                "research_rounds": state["research_rounds"],
+                "source_index": state["source_index"],
+                "source_titles": state["source_titles"],
+                "memory_context": state["memory_context"],
+            }
+        })
+    except Exception as e:
+        sessions[session_id].update({"status": "error", "error": str(e)})
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return {
+        "session_id": session_id,
+        "topic": req.topic,
+        "queries": plan.queries,
+        "reasoning": plan.reasoning,
+    }
+
+# ── STEP 2: START ─────────────────────────────────────────────────────────────
+@app.post("/research/start")
+def start_research(req: StartRequest):
+    """User approved the plan — kick off the full pipeline in background."""
+    session = sessions.get(req.session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if session["status"] != "awaiting_approval":
+        raise HTTPException(status_code=400, detail=f"Session is in state: {session['status']}")
+
+    session["status"] = "running"
+    # Override queries if user removed some
+    if req.queries:
+        session["_state"]["plan"].queries = req.queries
+    thread = threading.Thread(target=_run_pipeline, args=(req.session_id,), daemon=True)
+    thread.start()
+
+    return {"session_id": req.session_id, "status": "running"}
+
+def _run_pipeline(session_id: str):
+    """Background thread: runs crawler → architect → challenger → rewriter → factcheck → critic → export."""
+    session = sessions[session_id]
+    state = session["_state"].copy()
+
+    def update(node: str, progress: int):
+        session["current_node"] = node
+        session["progress"] = progress
+
+    try:
+        from agent import (
+            crawler_node, architect_node, section_challenger_node,
+            targeted_rewrite_node, factcheck_node, critic_node,
+            refine_node, should_refine, export_to_pdf
+        )
+
+        update("crawler", 15)
+        state.update(crawler_node(state))
+
+        update("architect", 35)
+        state.update(architect_node(state))
+
+        update("section_challenger", 60)
+        state["challenge_notes"] = ""
+        result = section_challenger_node(state)
+        state.update(result)
+
+        update("targeted_rewrite", 70)
+        result = targeted_rewrite_node(state)
+        if result:
+            state.update(result)
+
+        update("factcheck", 80)
+        factcheck_node(state)
+
+        update("critic", 88)
+        result = critic_node(state)
+        state.update(result)
+
+        # One refine loop if needed
+        if should_refine(state) == "refine":
+            update("refine", 90)
+            refine_result = refine_node(state)
+            state.update(refine_result)
+            update("crawler_2", 92)
+            state.update(crawler_node(state))
+            update("architect_2", 94)
+            state.update(architect_node(state))
+            update("factcheck_2", 96)
+            factcheck_node(state)
+            update("critic_2", 97)
+            result = critic_node(state)
+            state.update(result)
+
+        update("exporting", 98)
+        pdf_path = export_to_pdf(
+            state["raw_report"],
+            state["source_index"],
+            state["source_titles"],
+            state["topic"]
+        )
+
+        session.update({
+            "status": "done",
+            "current_node": "done",
+            "progress": 100,
+            "pdf_path": pdf_path,
+        })
+
+    except Exception as e:
+        session.update({
+            "status": "error",
+            "error": str(e),
+            "current_node": "error",
+        })
+        print(f"[PIPELINE ERROR] {e}")
+
+# ── STATUS ────────────────────────────────────────────────────────────────────
+@app.get("/research/status/{session_id}")
+def get_status(session_id: str):
+    session = sessions.get(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {
+        "session_id": session_id,
+        "status": session["status"],
+        "current_node": session["current_node"],
+        "progress": session["progress"],
+        "error": session.get("error"),
+    }
+
+# ── RESULT: PDF ───────────────────────────────────────────────────────────────
+@app.get("/research/result/{session_id}")
+def get_result(session_id: str):
+    session = sessions.get(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if session["status"] != "done":
+        raise HTTPException(status_code=400, detail=f"Not ready. Status: {session['status']}")
+    pdf_path = session.get("pdf_path")
+    if not pdf_path or not Path(pdf_path).exists():
+        raise HTTPException(status_code=404, detail="PDF not found")
+    return FileResponse(
+        path=pdf_path,
+        media_type="application/pdf",
+        filename=Path(pdf_path).name,
+        headers={"Content-Disposition": f"inline; filename={Path(pdf_path).name}"}
+    )
+
+# ── UI ────────────────────────────────────────────────────────────────────────
+@app.get("/", response_class=HTMLResponse)
+def serve_ui():
+    with open("ui.html", "r", encoding="utf-8") as f:
+        return f.read()
+
+if __name__ == "__main__":
+    uvicorn.run("api:app", host="0.0.0.0", port=8000, reload=False)

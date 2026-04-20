@@ -1,0 +1,687 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Research Agent</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0a0a0a;
+    --surface: #111111;
+    --border: #1e1e1e;
+    --border-bright: #2a2a2a;
+    --text: #e8e8e8;
+    --muted: #555;
+    --accent: #c8ff00;
+    --accent-dim: rgba(200,255,0,0.08);
+    --accent-border: rgba(200,255,0,0.2);
+    --red: #ff4444;
+    --mono: 'JetBrains Mono', monospace;
+    --sans: 'Inter', sans-serif;
+  }
+
+  html, body {
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 14px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ── LAYOUT ── */
+  .shell {
+    min-height: 100vh;
+    display: grid;
+    grid-template-rows: auto 1fr;
+  }
+
+  header {
+    border-bottom: 1px solid var(--border);
+    padding: 20px 40px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .logo-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 8px var(--accent);
+    animation: pulse 2s ease-in-out infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+
+  .logo-text {
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    color: var(--text);
+  }
+
+  .logo-tag {
+    margin-left: auto;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 0.05em;
+  }
+
+  main {
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 60px 20px;
+  }
+
+  .container {
+    width: 100%;
+    max-width: 720px;
+    display: flex;
+    flex-direction: column;
+    gap: 32px;
+  }
+
+  /* ── HERO ── */
+  .hero h1 {
+    font-size: 32px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    line-height: 1.2;
+    color: #fff;
+  }
+
+  .hero h1 span {
+    color: var(--accent);
+  }
+
+  .hero p {
+    margin-top: 10px;
+    color: var(--muted);
+    font-size: 14px;
+    max-width: 480px;
+  }
+
+  /* ── INPUT CARD ── */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+  }
+
+  .input-row {
+    display: flex;
+    gap: 10px;
+  }
+
+  input[type="text"] {
+    flex: 1;
+    background: var(--bg);
+    border: 1px solid var(--border-bright);
+    border-radius: 8px;
+    padding: 12px 16px;
+    font-family: var(--sans);
+    font-size: 14px;
+    color: var(--text);
+    outline: none;
+    transition: border-color 0.2s;
+  }
+
+  input[type="text"]::placeholder { color: var(--muted); }
+
+  input[type="text"]:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-dim);
+  }
+
+  .btn {
+    padding: 12px 20px;
+    border-radius: 8px;
+    border: none;
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.05em;
+    cursor: pointer;
+    transition: all 0.15s;
+    white-space: nowrap;
+  }
+
+  .btn-primary {
+    background: var(--accent);
+    color: #000;
+  }
+
+  .btn-primary:hover { background: #d4ff1a; }
+  .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .btn-ghost {
+    background: transparent;
+    color: var(--text);
+    border: 1px solid var(--border-bright);
+  }
+
+  .btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
+
+  .btn-approve {
+    background: var(--accent);
+    color: #000;
+    width: 100%;
+    padding: 14px;
+    font-size: 13px;
+    margin-top: 20px;
+  }
+
+  .btn-approve:hover { background: #d4ff1a; }
+
+  /* ── QUERY PLAN ── */
+  .plan-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 16px;
+  }
+
+  .plan-label {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    color: var(--muted);
+    text-transform: uppercase;
+  }
+
+  .query-count {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--accent);
+    background: var(--accent-dim);
+    border: 1px solid var(--accent-border);
+    padding: 2px 8px;
+    border-radius: 4px;
+  }
+
+  .query-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 320px;
+    overflow-y: auto;
+  }
+
+  .query-list::-webkit-scrollbar { width: 4px; }
+  .query-list::-webkit-scrollbar-track { background: transparent; }
+  .query-list::-webkit-scrollbar-thumb { background: var(--border-bright); border-radius: 2px; }
+
+  .query-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px 12px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 13px;
+    color: #ccc;
+    transition: border-color 0.15s;
+  }
+
+  .query-item:hover { border-color: var(--border-bright); }
+  .query-item:hover .query-remove { opacity: 1; }
+
+  .query-num {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    min-width: 20px;
+    padding-top: 1px;
+  }
+
+  .query-text { flex: 1; }
+
+  .query-remove {
+    opacity: 0;
+    background: none;
+    border: none;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+    padding: 0 2px;
+    transition: color 0.15s, opacity 0.15s;
+    flex-shrink: 0;
+  }
+
+  .query-remove:hover { color: var(--red); }
+
+  .reasoning-box {
+    margin-top: 14px;
+    padding: 12px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 12px;
+    color: var(--muted);
+    line-height: 1.6;
+  }
+
+  /* ── PROGRESS ── */
+  .progress-section { display: flex; flex-direction: column; gap: 16px; }
+
+  .progress-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .progress-topic {
+    font-size: 13px;
+    color: var(--muted);
+  }
+
+  .progress-pct {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--accent);
+  }
+
+  .progress-bar-wrap {
+    height: 2px;
+    background: var(--border);
+    border-radius: 1px;
+    overflow: hidden;
+  }
+
+  .progress-bar-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 1px;
+    transition: width 0.6s ease;
+    box-shadow: 0 0 8px var(--accent);
+  }
+
+  .node-log {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .node-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--muted);
+    transition: all 0.2s;
+  }
+
+  .node-item.active {
+    background: var(--accent-dim);
+    border: 1px solid var(--accent-border);
+    color: var(--accent);
+  }
+
+  .node-item.done {
+    color: #555;
+  }
+
+  .node-item.done .node-icon { color: #3a3a3a; }
+
+  .node-icon { font-size: 14px; width: 18px; text-align: center; }
+
+  /* ── RESULT ── */
+  .result-card {
+    background: var(--surface);
+    border: 1px solid var(--accent-border);
+    border-radius: 12px;
+    padding: 28px;
+    text-align: center;
+  }
+
+  .result-title {
+    font-size: 18px;
+    font-weight: 600;
+    color: #fff;
+    margin-bottom: 6px;
+  }
+
+  .result-sub {
+    font-size: 13px;
+    color: var(--muted);
+    margin-bottom: 24px;
+  }
+
+  .result-actions {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+  }
+
+  .btn-view {
+    background: var(--accent);
+    color: #000;
+    padding: 12px 28px;
+    font-size: 13px;
+  }
+
+  .btn-download {
+    background: transparent;
+    color: var(--text);
+    border: 1px solid var(--border-bright);
+    padding: 12px 28px;
+    font-size: 13px;
+  }
+
+  .btn-download:hover { border-color: var(--accent); color: var(--accent); }
+
+  .btn-new {
+    background: transparent;
+    color: var(--muted);
+    border: 1px solid var(--border);
+    padding: 12px 28px;
+    font-size: 13px;
+    margin-top: 12px;
+  }
+
+  .btn-new:hover { color: var(--text); border-color: var(--border-bright); }
+
+  /* ── ERROR ── */
+  .error-box {
+    padding: 14px 16px;
+    background: rgba(255,68,68,0.06);
+    border: 1px solid rgba(255,68,68,0.2);
+    border-radius: 8px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--red);
+  }
+
+  /* ── HIDDEN ── */
+  .hidden { display: none !important; }
+
+  /* ── SPINNER ── */
+  .spinner {
+    width: 14px; height: 14px;
+    border: 2px solid var(--border-bright);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    display: inline-block;
+  }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="shell">
+  <header>
+    <div class="logo-dot"></div>
+    <span class="logo-text">RESEARCH_AGENT</span>
+    <span class="logo-tag">v1.0 · LangGraph + Llama-3.3-70B</span>
+  </header>
+
+  <main>
+    <div class="container">
+
+      <!-- HERO -->
+      <div class="hero">
+        <h1>Deep research,<br/><span>automatically.</span></h1>
+        <p>Multi-agent pipeline that plans, crawls, writes, self-critiques, and exports a cited PDF report — no human in the loop.</p>
+      </div>
+
+      <!-- STEP 1: INPUT -->
+      <div id="step-input" class="card">
+        <div class="input-row">
+          <input type="text" id="topic-input" placeholder="e.g. The Rise and Fall of Nokia" autocomplete="off" />
+          <button class="btn btn-primary" id="plan-btn" onclick="planResearch()">PLAN →</button>
+        </div>
+      </div>
+
+      <!-- STEP 2: QUERY PLAN -->
+      <div id="step-plan" class="card hidden">
+        <div class="plan-header">
+          <span class="plan-label">Search Plan</span>
+          <span class="query-count" id="query-count">0 queries</span>
+        </div>
+        <div class="query-list" id="query-list"></div>
+        <div class="reasoning-box" id="reasoning-box"></div>
+        <button class="btn btn-approve" onclick="startResearch()">APPROVE & START RESEARCH →</button>
+        <button class="btn btn-ghost" style="width:100%;margin-top:8px;padding:12px;" onclick="rejectPlan()">← REJECT & REPLAN</button>
+      </div>
+
+      <!-- STEP 3: PROGRESS -->
+      <div id="step-progress" class="card hidden">
+        <div class="progress-section">
+          <div class="progress-header">
+            <span class="progress-topic" id="progress-topic"></span>
+            <span class="progress-pct" id="progress-pct">0%</span>
+          </div>
+          <div class="progress-bar-wrap">
+            <div class="progress-bar-fill" id="progress-bar" style="width:0%"></div>
+          </div>
+          <div class="node-log" id="node-log"></div>
+        </div>
+      </div>
+
+      <!-- STEP 4: RESULT -->
+      <div id="step-result" class="result-card hidden">
+        <div class="result-title">Report Ready</div>
+        <div class="result-sub" id="result-sub">Your research report has been generated.</div>
+        <div class="result-actions">
+          <button class="btn btn-view" id="view-btn" onclick="viewPDF()">VIEW REPORT</button>
+          <button class="btn btn-download btn-ghost" id="download-btn" onclick="downloadPDF()">DOWNLOAD PDF</button>
+        </div>
+        <br/>
+        <button class="btn btn-new btn-ghost" onclick="resetUI()">← NEW RESEARCH</button>
+      </div>
+
+      <!-- ERROR -->
+      <div id="step-error" class="error-box hidden" id="error-box"></div>
+
+    </div>
+  </main>
+</div>
+
+<script>
+  let sessionId = null;
+  let pollInterval = null;
+  let approvedQueries = [];
+
+  const NODES = [
+    { key: "strategist",        label: "STRATEGIST",         icon: "◈" },
+    { key: "crawler",           label: "CRAWLER",            icon: "◎" },
+    { key: "architect",         label: "ARCHITECT",          icon: "◇" },
+    { key: "section_challenger",label: "CHALLENGER",         icon: "◆" },
+    { key: "targeted_rewrite",  label: "REWRITER",           icon: "◈" },
+    { key: "factcheck",         label: "FACTCHECK",          icon: "◉" },
+    { key: "critic",            label: "CRITIC",             icon: "◐" },
+    { key: "exporting",         label: "EXPORTING PDF",      icon: "◑" },
+    { key: "done",              label: "COMPLETE",           icon: "●" },
+  ];
+
+  function show(id) { document.getElementById(id).classList.remove('hidden'); }
+  function hide(id) { document.getElementById(id).classList.add('hidden'); }
+
+  async function planResearch() {
+    const topic = document.getElementById('topic-input').value.trim();
+    if (!topic) return;
+
+    const btn = document.getElementById('plan-btn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>';
+
+    try {
+      const res = await fetch('/research/plan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ topic })
+      });
+
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      sessionId = data.session_id;
+
+      // Render query plan
+      const list = document.getElementById('query-list');
+      approvedQueries = [...data.queries];
+
+      function renderQueries() {
+        list.innerHTML = approvedQueries.map((q, i) =>
+          `<div class="query-item" id="qi-${i}">
+            <span class="query-num">${String(i+1).padStart(2,'0')}</span>
+            <span class="query-text">${q}</span>
+            <button class="query-remove" onclick="removeQuery(${i})" title="Remove">×</button>
+          </div>`
+        ).join('');
+        document.getElementById('query-count').textContent = `${approvedQueries.length} queries`;
+      }
+
+      renderQueries();
+      window._renderQueries = renderQueries;
+      document.getElementById('reasoning-box').textContent = data.reasoning;
+
+      hide('step-input');
+      show('step-plan');
+
+    } catch(e) {
+      showError(e.message);
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = 'PLAN →';
+    }
+  }
+
+  function removeQuery(idx) {
+    approvedQueries.splice(idx, 1);
+    window._renderQueries();
+  }
+
+  function rejectPlan() {
+    sessionId = null;
+    approvedQueries = [];
+    hide('step-plan');
+    show('step-input');
+    document.getElementById('topic-input').focus();
+  }
+
+  async function startResearch() {
+    hide('step-plan');
+    show('step-progress');
+
+    const topic = document.getElementById('topic-input').value.trim();
+    document.getElementById('progress-topic').textContent = topic;
+
+    // Render node log
+    const log = document.getElementById('node-log');
+    log.innerHTML = NODES.map(n =>
+      `<div class="node-item" id="node-${n.key}">
+        <span class="node-icon">${n.icon}</span>
+        <span>${n.label}</span>
+      </div>`
+    ).join('');
+
+    try {
+      const res = await fetch('/research/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sessionId, queries: approvedQueries })
+      });
+      if (!res.ok) throw new Error(await res.text());
+
+      pollInterval = setInterval(pollStatus, 2000);
+
+    } catch(e) {
+      showError(e.message);
+    }
+  }
+
+  async function pollStatus() {
+    try {
+      const res = await fetch(`/research/status/${sessionId}`);
+      const data = await res.json();
+
+      // Update progress bar
+      document.getElementById('progress-bar').style.width = data.progress + '%';
+      document.getElementById('progress-pct').textContent = data.progress + '%';
+
+      // Update node highlights
+      const currentIdx = NODES.findIndex(n => n.key === data.current_node);
+      NODES.forEach((n, i) => {
+        const el = document.getElementById(`node-${n.key}`);
+        if (!el) return;
+        el.classList.remove('active', 'done');
+        if (i < currentIdx) el.classList.add('done');
+        else if (i === currentIdx) el.classList.add('active');
+      });
+
+      if (data.status === 'done') {
+        clearInterval(pollInterval);
+        hide('step-progress');
+        show('step-result');
+        document.getElementById('result-sub').textContent =
+          `${document.getElementById('topic-input').value.trim()}`;
+      }
+
+      if (data.status === 'error') {
+        clearInterval(pollInterval);
+        hide('step-progress');
+        showError(data.error || 'Unknown error');
+      }
+
+    } catch(e) {
+      clearInterval(pollInterval);
+      showError(e.message);
+    }
+  }
+
+  function viewPDF() {
+    window.open(`/research/result/${sessionId}`, '_blank');
+  }
+
+  function downloadPDF() {
+    const a = document.createElement('a');
+    a.href = `/research/result/${sessionId}`;
+    a.download = '';
+    a.click();
+  }
+
+  function showError(msg) {
+    const el = document.getElementById('step-error');
+    el.textContent = '⚠ ' + msg;
+    el.classList.remove('hidden');
+  }
+
+  function resetUI() {
+    sessionId = null;
+    if (pollInterval) clearInterval(pollInterval);
+    document.getElementById('topic-input').value = '';
+    hide('step-plan');
+    hide('step-progress');
+    hide('step-result');
+    hide('step-error');
+    show('step-input');
+  }
+
+  // Enter key support
+  document.addEventListener('DOMContentLoaded', () => {
+    document.getElementById('topic-input').addEventListener('keydown', e => {
+      if (e.key === 'Enter') planResearch();
+    });
+  });
+</script>
+</body>
+</html>
