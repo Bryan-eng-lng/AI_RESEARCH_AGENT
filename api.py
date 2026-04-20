@@ -12,6 +12,17 @@ import uvicorn
 
 app = FastAPI(title="AI Research Agent")
 
+@app.on_event("startup")
+async def startup_check():
+    import os
+    keys = {
+        "TAVILY_API_KEY": bool(os.getenv("TAVILY_API_KEY")),
+        "GROQ_API_KEY": bool(os.getenv("GROQ_API_KEY")),
+        "GROQ_API_KEY_2": bool(os.getenv("GROQ_API_KEY_2")),
+        "TOGETHER_API_KEY": bool(os.getenv("TOGETHER_API_KEY")),
+    }
+    print(f"[STARTUP] Environment keys loaded: {keys}")
+
 # ── SESSION STORE ─────────────────────────────────────────────────────────────
 sessions = {}
 # session = {

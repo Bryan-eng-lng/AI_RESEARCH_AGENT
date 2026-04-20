@@ -19,7 +19,7 @@ from rag import query_memory, save_to_memory
 
 
 
-load_dotenv(dotenv_path=".env")
+load_dotenv(dotenv_path=".env", override=False)
 
 # ── TOOLS ─────────────────────────────────────────────────────────────────────
 def get_web_search():
