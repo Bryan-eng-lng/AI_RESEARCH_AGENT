@@ -19,6 +19,7 @@ from rag import query_memory, save_to_memory
 
 
 
+load_dotenv(dotenv_path="/etc/secrets/.env", override=False)
 load_dotenv(dotenv_path=".env", override=False)
 
 # ── TOOLS ─────────────────────────────────────────────────────────────────────
