@@ -6,6 +6,7 @@ langchain-tavily
 langchain-chroma
 langchain-community
 langgraph
+langgraph-checkpoint-sqlite
 fpdf2
 requests
 python-dotenv
