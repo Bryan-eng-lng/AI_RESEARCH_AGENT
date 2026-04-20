@@ -1,9 +1,10 @@
 import os
 import uuid
 import threading
+import io
 from pathlib import Path
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional
@@ -20,7 +21,8 @@ sessions = {}
 #   "reasoning": str,
 #   "current_node": str,
 #   "progress": int (0-100),
-#   "pdf_path": str | None,
+#   "pdf_bytes": bytes | None,
+#   "pdf_filename": str | None,
 #   "error": str | None,
 # }
 
@@ -46,7 +48,8 @@ def plan_research(req: PlanRequest):
         "reasoning": "",
         "current_node": "strategist",
         "progress": 5,
-        "pdf_path": None,
+        "pdf_bytes": None,
+        "pdf_filename": None,
         "error": None,
     }
 
@@ -162,11 +165,19 @@ def _run_pipeline(session_id: str):
             state["topic"]
         )
 
+        # Read PDF into memory then delete local file
+        pdf_bytes = Path(pdf_path).read_bytes()
+        try:
+            Path(pdf_path).unlink()
+        except Exception:
+            pass
+
         session.update({
             "status": "done",
             "current_node": "done",
             "progress": 100,
-            "pdf_path": pdf_path,
+            "pdf_bytes": pdf_bytes,
+            "pdf_filename": Path(pdf_path).name,
         })
 
     except Exception as e:
@@ -199,14 +210,32 @@ def get_result(session_id: str):
         raise HTTPException(status_code=404, detail="Session not found")
     if session["status"] != "done":
         raise HTTPException(status_code=400, detail=f"Not ready. Status: {session['status']}")
-    pdf_path = session.get("pdf_path")
-    if not pdf_path or not Path(pdf_path).exists():
+    pdf_bytes = session.get("pdf_bytes")
+    if not pdf_bytes:
         raise HTTPException(status_code=404, detail="PDF not found")
-    return FileResponse(
-        path=pdf_path,
+    filename = session.get("pdf_filename", "report.pdf")
+    return StreamingResponse(
+        io.BytesIO(pdf_bytes),
         media_type="application/pdf",
-        filename=Path(pdf_path).name,
-        headers={"Content-Disposition": f"inline; filename={Path(pdf_path).name}"}
+        headers={"Content-Disposition": f"inline; filename={filename}"}
+    )
+
+@app.get("/research/download/{session_id}")
+def download_result(session_id: str):
+    """Force download the PDF."""
+    session = sessions.get(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if session["status"] != "done":
+        raise HTTPException(status_code=400, detail=f"Not ready. Status: {session['status']}")
+    pdf_bytes = session.get("pdf_bytes")
+    if not pdf_bytes:
+        raise HTTPException(status_code=404, detail="PDF not found")
+    filename = session.get("pdf_filename", "report.pdf")
+    return StreamingResponse(
+        io.BytesIO(pdf_bytes),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
     )
 
 # ── UI ────────────────────────────────────────────────────────────────────────

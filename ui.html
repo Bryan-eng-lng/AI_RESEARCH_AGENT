@@ -653,10 +653,7 @@
   }
 
   function downloadPDF() {
-    const a = document.createElement('a');
-    a.href = `/research/result/${sessionId}`;
-    a.download = '';
-    a.click();
+    window.location.href = `/research/download/${sessionId}`;
   }
 
   function showError(msg) {

@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+langchain-groq
+langchain-together
+langchain-tavily
+langchain-chroma
+langchain-community
+langgraph
+fpdf2
+requests
+python-dotenv
+pydantic
+arxiv

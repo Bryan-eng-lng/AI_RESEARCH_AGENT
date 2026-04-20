@@ -246,7 +246,6 @@ def strategist_node(state: AgentState):
 
     structured_llm = llm.with_structured_output(ResearchPlan)
     memory_hint = f"\n\nPAST RESEARCH (avoid re-searching these):\n{memory_context}" if memory_context else ""
-    time.sleep(5)
     for attempt in range(len(_groq_keys) * 2 + 1):
         try:
             plan = structured_llm.invoke([
@@ -426,7 +425,6 @@ RAW DATA:
 
     # Step 1: Write title, key findings, executive summary
     print("  Writing header (title, findings, summary)...")
-    time.sleep(3)
     header = llm_invoke_with_rotation([
         SystemMessage(content=section_system),
         HumanMessage(content=f"""{context_block}
@@ -452,7 +450,6 @@ Write ONLY the following three parts, nothing else:
     sections = []
     for i, sec_title in enumerate(section_topics, 1):
         print(f"  Writing section {i}/{len(section_topics)}: {sec_title}...")
-        time.sleep(4)
         section = llm_invoke_with_rotation([
             SystemMessage(content=section_system),
             HumanMessage(content=f"""{context_block}
@@ -488,7 +485,6 @@ Begin the section now and write until you have covered the topic thoroughly:""")
 
     # Step 3: Write synthesis
     print("  Writing synthesis...")
-    time.sleep(3)
     synthesis = llm_invoke_with_rotation([
         SystemMessage(content=section_system),
         HumanMessage(content=f"""{context_block}
@@ -524,7 +520,6 @@ def factcheck_node(state: AgentState):
 def critic_node(state: AgentState):
     iteration = state.get("iteration", 1)
     print(f"\n[CRITIC] Quality audit - iteration {iteration}...")
-    time.sleep(15)
     structured_llm = llm.with_structured_output(QualityVerdict)
     raw = state.get("raw_report", "")[:3000]
     verdict = structured_llm.invoke([
@@ -616,7 +611,7 @@ def export_to_pdf(raw_report: str, source_index: Dict, source_titles: Dict, topi
         pdf.cell(w, 7, "KEY FINDINGS", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         draw_line(pdf, w, 180, 180, 180)
         pdf.ln(1)
-        pdf.set_font("Helvetica", "", 9)
+        pdf.set_font("Helvetica", "", 10)
         pdf.set_text_color(40, 40, 40)
         for line in findings_match.group(1).strip().split("\n"):
             if line.strip():
@@ -651,9 +646,9 @@ def export_to_pdf(raw_report: str, source_index: Dict, source_titles: Dict, topi
         pdf.cell(w, 8, "EXECUTIVE SUMMARY", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         draw_line(pdf, w, 20, 20, 20)
         pdf.ln(3)
-        pdf.set_font("Helvetica", "", 9.5)
+        pdf.set_font("Helvetica", "", 10.5)
         pdf.set_text_color(30, 30, 30)
-        pdf.multi_cell(w, 5.5, sanitize(clean_body(exec_match.group(1))))
+        pdf.multi_cell(w, 6, sanitize(clean_body(exec_match.group(1))))
 
     # ── SECTIONS (no page break between — just a divider) ─────────────────────
     section_blocks = re.findall(
@@ -672,9 +667,9 @@ def export_to_pdf(raw_report: str, source_index: Dict, source_titles: Dict, topi
         pdf.set_text_color(20, 20, 20)
         pdf.multi_cell(w, 7, sanitize(sec_title.strip()))
         pdf.ln(2)
-        pdf.set_font("Helvetica", "", 9.5)
+        pdf.set_font("Helvetica", "", 10.5)
         pdf.set_text_color(30, 30, 30)
-        pdf.multi_cell(w, 5.5, sanitize(clean_body(sec_body)))
+        pdf.multi_cell(w, 6, sanitize(clean_body(sec_body)))
 
     # ── SYNTHESIS ─────────────────────────────────────────────────────────────
     synth_match = re.search(r'##\s+SYNTHESIS\s*\n(.*?)(?=\n##|\Z)', raw_report, re.DOTALL)
@@ -686,9 +681,9 @@ def export_to_pdf(raw_report: str, source_index: Dict, source_titles: Dict, topi
         pdf.set_text_color(20, 20, 20)
         pdf.cell(w, 8, "FINAL SYNTHESIS", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         pdf.ln(2)
-        pdf.set_font("Helvetica", "", 9.5)
+        pdf.set_font("Helvetica", "", 10.5)
         pdf.set_text_color(30, 30, 30)
-        pdf.multi_cell(w, 5.5, sanitize(clean_body(synth_match.group(1))))
+        pdf.multi_cell(w, 6, sanitize(clean_body(synth_match.group(1))))
 
     # ── VERIFIED SOURCES (2 columns, compact) ─────────────────────────────────
     pdf.add_page()
