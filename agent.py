@@ -30,13 +30,22 @@ def get_web_search():
     )
 
 # ── LLM with key rotation ─────────────────────────────────────────────────────
-_groq_keys = [k for k in [
-    os.getenv("GROQ_API_KEY"),
-    os.getenv("GROQ_API_KEY_2"),
-] if k]
+_groq_keys = []
 _key_index = 0
-_using_fallback = False  # True when all Groq keys exhausted, using Together.ai
-_tried_keys: set = set()  # Tracks exhausted Groq key indices across all calls
+_using_fallback = False
+_tried_keys: set = set()
+llm = None
+
+def _init_llm():
+    """Initialize LLM on first use, not at import time."""
+    global _groq_keys, llm
+    if not _groq_keys:
+        _groq_keys = [k for k in [
+            os.getenv("GROQ_API_KEY"),
+            os.getenv("GROQ_API_KEY_2"),
+        ] if k]
+    if llm is None and _groq_keys:
+        llm = make_llm(_groq_keys[0])
 
 def make_llm(key: str):
     return ChatGroq(model="llama-3.3-70b-versatile", api_key=key, temperature=0.2)
@@ -51,8 +60,6 @@ def make_together_llm():
         together_api_key=together_key,
         temperature=0.2,
     )
-
-llm = make_llm(_groq_keys[0])
 
 def _is_rate_limit_error(e: Exception) -> bool:
     """Detect rate limit errors across different exception types."""
@@ -71,6 +78,7 @@ def _is_rate_limit_error(e: Exception) -> bool:
 def llm_invoke_with_rotation(messages):
     """Invoke LLM, rotating Groq keys on rate limit, then falling back to Together.ai."""
     global llm, _key_index, _using_fallback, _tried_keys
+    _init_llm()  # ensure LLM is initialized
 
     if _using_fallback:
         try:
@@ -112,6 +120,7 @@ def llm_invoke_with_rotation(messages):
 def _rotate_key():
     """Rotate to next available Groq API key."""
     global llm, _key_index, _using_fallback
+    _init_llm()
     if _using_fallback:
         return
     _key_index = (_key_index + 1) % len(_groq_keys)
@@ -245,6 +254,7 @@ def strategist_node(state: AgentState):
     memory_context = query_memory(state["topic"])
     print(f"  Memory: {'found past research' if memory_context else 'starting fresh'}")
 
+    _init_llm()
     structured_llm = llm.with_structured_output(ResearchPlan)
     memory_hint = f"\n\nPAST RESEARCH (avoid re-searching these):\n{memory_context}" if memory_context else ""
     for attempt in range(len(_groq_keys) * 2 + 1):
