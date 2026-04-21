@@ -249,6 +249,18 @@ def download_result(session_id: str):
         headers={"Content-Disposition": f"attachment; filename={filename}"}
     )
 
+@app.get("/debug/env")
+def debug_env():
+    """Debug endpoint to check env vars are loaded."""
+    import os
+    return {
+        "TAVILY_API_KEY": os.getenv("TAVILY_API_KEY", "")[:8] + "..." if os.getenv("TAVILY_API_KEY") else "MISSING",
+        "GROQ_API_KEY": os.getenv("GROQ_API_KEY", "")[:8] + "..." if os.getenv("GROQ_API_KEY") else "MISSING",
+        "GROQ_API_KEY_2": os.getenv("GROQ_API_KEY_2", "")[:8] + "..." if os.getenv("GROQ_API_KEY_2") else "MISSING",
+        "TOGETHER_API_KEY": os.getenv("TOGETHER_API_KEY", "")[:8] + "..." if os.getenv("TOGETHER_API_KEY") else "MISSING",
+        "secret_file_exists": os.path.exists("/etc/secrets/.env"),
+    }
+
 # ── UI ────────────────────────────────────────────────────────────────────────
 @app.get("/", response_class=HTMLResponse)
 def serve_ui():
