@@ -44,6 +44,11 @@ def get_web_search():
 def make_llm(key: str):
     return ChatGroq(model="llama-3.3-70b-versatile", api_key=key, temperature=0.2)
 
+# ── CUSTOM EXCEPTIONS ─────────────────────────────────────────────────────────
+class RateLimitExhausted(Exception):
+    """Raised when all LLM API keys are rate limited and no fallback is available."""
+    pass
+
 # ── LLM with key rotation ─────────────────────────────────────────────────────
 _groq_keys = []
 _key_index = 0
@@ -98,6 +103,10 @@ def llm_invoke_with_rotation(messages):
         try:
             return llm.invoke(messages)
         except Exception as e:
+            if _is_rate_limit_error(e):
+                raise RateLimitExhausted(
+                    "All API keys are currently rate limited. Please try again in 5 minutes."
+                )
             print(f"  [TOGETHER ERROR] {e}")
             raise
 
@@ -123,6 +132,11 @@ def llm_invoke_with_rotation(messages):
                         _using_fallback = True
                         _tried_keys = set()  # reset for future use
                         time.sleep(2)
+                    except RuntimeError:
+                        # No Together.ai key configured at all
+                        raise RateLimitExhausted(
+                            "All API keys are currently rate limited. Please try again in 5 minutes."
+                        )
                     except Exception as fallback_e:
                         if "401" in str(fallback_e) or "invalid" in str(fallback_e).lower():
                             print("  [TOGETHER AUTH FAILED] Invalid API key — check TOGETHER_API_KEY in .env")

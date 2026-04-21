@@ -658,13 +658,34 @@
 
   function showError(msg) {
     const el = document.getElementById('step-error');
-    // Make "not enough sources" errors more user-friendly
     if (msg.includes('Not enough sources')) {
       el.innerHTML = '⚠ <strong>Topic not found on the web.</strong><br/>' + msg.split('(')[0].trim() + '<br/><small>Try a well-known company, technology, event, or person.</small><br/><br/><button class="btn btn-ghost" style="padding:8px 16px;font-size:12px;" onclick="resetUI()">← TRY AGAIN</button>';
+    } else if (msg.includes('rate limited') || msg.includes('try again in')) {
+      el.innerHTML = '⚠ <strong>API limit reached.</strong><br/>All inference keys are currently busy. Please try again in a few minutes.<br/><br/><span id="countdown-text" style="font-family:var(--mono);color:var(--accent);font-size:13px;">Retry available in 5:00</span><br/><br/><button class="btn btn-ghost" style="padding:8px 16px;font-size:12px;" id="retry-btn" onclick="resetUI()" disabled>← TRY AGAIN</button>';
+      el.classList.remove('hidden');
+      startCountdown(5 * 60);
+      return;
     } else {
       el.innerHTML = '⚠ ' + msg + '<br/><br/><button class="btn btn-ghost" style="padding:8px 16px;font-size:12px;" onclick="resetUI()">← TRY AGAIN</button>';
     }
     el.classList.remove('hidden');
+  }
+
+  function startCountdown(seconds) {
+    const text = document.getElementById('countdown-text');
+    const btn = document.getElementById('retry-btn');
+    let remaining = seconds;
+    const interval = setInterval(() => {
+      remaining--;
+      const m = Math.floor(remaining / 60);
+      const s = remaining % 60;
+      if (text) text.textContent = `Retry available in ${m}:${String(s).padStart(2, '0')}`;
+      if (remaining <= 0) {
+        clearInterval(interval);
+        if (text) text.textContent = 'Ready to retry!';
+        if (btn) { btn.disabled = false; btn.textContent = '← TRY AGAIN'; }
+      }
+    }, 1000);
   }
 
   function resetUI() {
