@@ -22,6 +22,17 @@ from rag import query_memory, save_to_memory
 load_dotenv(dotenv_path="/etc/secrets/.env", override=False)
 load_dotenv(dotenv_path=".env", override=False)
 
+# Manual fallback for Render secret files
+_secret_path = "/etc/secrets/.env"
+if os.path.exists(_secret_path):
+    with open(_secret_path) as _f:
+        for _line in _f:
+            _line = _line.strip()
+            if _line and "=" in _line and not _line.startswith("#"):
+                _k, _v = _line.split("=", 1)
+                if not os.environ.get(_k.strip()):
+                    os.environ[_k.strip()] = _v.strip()
+
 # ── TOOLS ─────────────────────────────────────────────────────────────────────
 def get_web_search():
     return TavilySearch(
