@@ -658,7 +658,12 @@
 
   function showError(msg) {
     const el = document.getElementById('step-error');
-    el.textContent = '⚠ ' + msg;
+    // Make "not enough sources" errors more user-friendly
+    if (msg.includes('Not enough sources')) {
+      el.innerHTML = '⚠ <strong>Topic not found on the web.</strong><br/>' + msg.split('(')[0].trim() + '<br/><small>Try a well-known company, technology, event, or person.</small><br/><br/><button class="btn btn-ghost" style="padding:8px 16px;font-size:12px;" onclick="resetUI()">← TRY AGAIN</button>';
+    } else {
+      el.innerHTML = '⚠ ' + msg + '<br/><br/><button class="btn btn-ghost" style="padding:8px 16px;font-size:12px;" onclick="resetUI()">← TRY AGAIN</button>';
+    }
     el.classList.remove('hidden');
   }
 

@@ -375,6 +375,16 @@ def crawler_node(state: AgentState):
         raw_chunks.append(f"[{sid}] SOURCE: {url}\nTITLE: {title}\n{content}")
 
     print(f"  {len(source_index)} sources indexed, {deep_fetch_count} deep fetched")
+
+    # ── GUARD: stop before any LLM calls if web returned nothing useful ───────
+    new_sources_count = len(source_index)
+    if new_sources_count < 3:
+        raise ValueError(
+            f"Not enough sources found for '{state['topic']}' ({new_sources_count} result(s)). "
+            "This topic may not have enough public information available. "
+            "Try a well-known subject, event, company, or technology."
+        )
+
     existing_raw = state.get("raw_data", "")
     combined = existing_raw + f"\n\n=== ROUND {rounds} ===\n\n" + "\n---\n".join(raw_chunks)
     return {
