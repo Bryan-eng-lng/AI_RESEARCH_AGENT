@@ -225,10 +225,12 @@ def get_result(session_id: str):
     if not pdf_bytes:
         raise HTTPException(status_code=404, detail="PDF not found")
     filename = session.get("pdf_filename", "report.pdf")
+    if not filename.endswith(".pdf"):
+        filename = filename + ".pdf"
     return StreamingResponse(
         io.BytesIO(pdf_bytes),
         media_type="application/pdf",
-        headers={"Content-Disposition": f"inline; filename={filename}"}
+        headers={"Content-Disposition": f"inline; filename=\"{filename}\""}
     )
 
 @app.get("/research/download/{session_id}")
@@ -243,10 +245,12 @@ def download_result(session_id: str):
     if not pdf_bytes:
         raise HTTPException(status_code=404, detail="PDF not found")
     filename = session.get("pdf_filename", "report.pdf")
+    if not filename.endswith(".pdf"):
+        filename = filename + ".pdf"
     return StreamingResponse(
         io.BytesIO(pdf_bytes),
         media_type="application/pdf",
-        headers={"Content-Disposition": f"attachment; filename={filename}"}
+        headers={"Content-Disposition": f"attachment; filename=\"{filename}\""}
     )
 
 @app.get("/debug/env")
