@@ -48,18 +48,21 @@ User Input (Topic)
          │                                                          │
          ▼                                                          │
 ┌─────────────────┐                                                 │
-│   ARCHITECT     │  Writes 7-section long-form report              │
-│                 │  Includes timeline, comparison tables,          │
-│                 │  contrarian analysis, critical judgments        │
+│   ARCHITECT     │  Generates topic-specific section plan          │
+│                 │  Writes each section independently              │
+│                 │  (title, key findings, exec summary,            │
+│                 │   sections, synthesis — separate LLM calls)     │
+│                 │  Enforces timeline, comparison table,           │
+│                 │  contrarian angle, and critical judgments       │
 │                 │  Cites sources inline using [N] notation        │
 └────────┬────────┘                                                 │
          │                                                          │
          ▼                                                          │
 ┌─────────────────┐                                                 │
-│ SECTION         │  Reads full report, identifies 2 weakest        │
+│ SECTION         │  Reads section previews, identifies 2 weakest  │
 │ CHALLENGER      │  sections. Returns specific challenges:         │
-│                 │  "Safe explanation / Repetition / Missing       │
-│                 │   contrarian"                                   │
+│                 │  "Safe explanation / Repetition /               │
+│                 │   Missing contrarian / No specifics"            │
 └────────┬────────┘                                                 │
          │                                                          │
          ▼                                                          │
@@ -70,20 +73,27 @@ User Input (Topic)
          │                                                          │
          ▼                                                          │
 ┌─────────────────┐                                                 │
-│   FACTCHECK     │  Verifies every citation against crawled        │
-│                 │  source index — hallucination firewall          │
+│   FACTCHECK     │  Checks every [N] citation against crawled      │
+│                 │  source index, flags unverified IDs             │
 └────────┬────────┘                                                 │
          │                                                          │
          ▼                                                          │
 ┌─────────────────┐                                                 │
 │     CRITIC      │  Scores report quality 1-10                     │
-│                 │  Score < 8 → generates follow-up queries        │
+│                 │  NEEDS_MORE_RESEARCH → REFINE node              │
+│                 │  APPROVED → export (max 4 iterations)           │
 └────────┬────────┘                                                 │
          │                                                          │
       ┌──┴──┐                                                       │
       │     │                                                       │
-    PASS  FAIL → back to CRAWLER (max 4 rounds)                    │
-      │                                                             │
+   PASS   FAIL                                                      │
+      │     │                                                       │
+      │     ▼                                                       │
+      │  ┌─────────────────┐                                        │
+      │  │     REFINE      │  Builds follow-up queries from gaps    │
+      │  └────────┬────────┘                                        │
+      │           │                                                 │
+      │           └──────────► back to CRAWLER                     │
       ▼                                                             │
 ┌─────────────────┐                                                 │
 │   PDF EXPORT    │  Cover page, TOC, sections, synthesis,          │
@@ -105,13 +115,13 @@ User Input (Topic)
 Simple LLM chains go A→B→C with no way back. Research is iterative — sometimes you need to loop back and dig deeper. LangGraph enables conditional loops, state persistence, and human-in-the-loop checkpoints that aren't possible with basic chaining.
 
 **Section Challenger + Targeted Rewriter**
-After the architect writes the report, a second agent reads all sections and identifies the 2 weakest ones — flagging problems like "safe explanation with no critical judgment", "repetition of a point from another section", or "missing contrarian angle". A targeted rewriter then fixes only those sections. This is a lightweight debate loop that adds analytical depth at minimal token cost (3 extra LLM calls vs 21 for a full debate).
+After the architect writes the report, a second agent reads a preview of each section and identifies the 2 weakest ones — flagging problems like "safe explanation with no critical judgment", "repetition of a point from another section", "missing contrarian angle", or "no specifics (claims without hard numbers or dates)". A targeted rewriter then fixes only those sections. This is a lightweight debate loop that adds analytical depth at minimal token cost (3 extra LLM calls vs 21 for a full debate).
 
 **Hallucination Firewall**
-During crawling, every source gets a numbered ID. The LLM can only cite IDs from that list. The factcheck node verifies every citation against the real crawled index. This is a structural solution to hallucination, not a prompt trick.
+During crawling, every source gets a numbered ID. The LLM can only cite IDs from that list. The factcheck node scans every citation in the report and flags any ID not present in the real crawled index, making hallucinated citations visible. This is a structural solution to hallucination — the LLM is constrained by the source index at write time, not just checked after the fact.
 
-**Two-Step Writing**
-Using structured output (JSON schema) for long-form writing causes LLMs to write minimally to satisfy the schema. The architect node first writes freely as a journalist, then a second call parses that into structure. This produces significantly richer content.
+**Section-by-Section Writing**
+Using structured output (JSON schema) for long-form writing causes LLMs to write minimally to satisfy the schema. Instead, the architect generates a topic-specific section plan first, then writes each section in a dedicated LLM call as free-form prose (like a journalist), and finally assembles the full document. This produces significantly richer content than a single structured call.
 
 **Multi-Provider Key Rotation**
 The agent rotates across multiple Groq API keys automatically. When all Groq keys hit rate limits, it switches to Together.ai (same Llama-3.3-70B model) without crashing. This allows long research runs to complete even under free-tier constraints.
